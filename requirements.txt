@@ -1,0 +1,7 @@
+streamlit
+pandas
+fpdf
+plotly
+openpyxl
+streamlit-gsheets
+st-annotated-text
