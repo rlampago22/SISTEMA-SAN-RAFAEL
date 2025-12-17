@@ -2,5 +2,5 @@ streamlit
 pandas
 fpdf
 plotly
-streamlit-gsheets
+st-gsheets-connection
 st-annotated-text
