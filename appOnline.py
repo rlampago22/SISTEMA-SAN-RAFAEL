@@ -618,11 +618,11 @@ def main():
             g1, g2 = st.columns(2)
             totais = df_ver.groupby("Tipo")["Valor"].sum().reset_index()
             fig1 = px.bar(totais, x="Tipo", y="Valor", color="Tipo", title="Receitas vs Despesas", color_discrete_map={"Entrada": "#2ecc71", "Saída": "#e74c3c"}, height=300)
-            g1.plotly_chart(fig1, width="stretch")
+            g1.plotly_chart(fig1, use_container_width=True)
             df_ent = df_ver[df_ver["Tipo"]=="Entrada"]
             if not df_ent.empty:
                 fig2 = px.pie(df_ent, names="Status", values="Valor", title="Status de Recebimento", color="Status", color_discrete_map={"Ok": "#3498db", "Pendente": "#f1c40f"}, height=300)
-                g2.plotly_chart(fig2, width="stretch")
+                g2.plotly_chart(fig2, use_container_width=True)
         else: st.info("Sem dados para exibir.")
         
         # --- PAINEL DE INADIMPLÊNCIA ---
@@ -808,4 +808,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
