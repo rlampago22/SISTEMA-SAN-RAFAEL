@@ -643,7 +643,7 @@ def main():
                 
                 devedores_show = devedores.rename(columns={"Valor": "Saldo Devedor"}).copy()
                 devedores_show["Saldo Devedor"] = devedores_show["Saldo Devedor"].apply(formatar_real)
-                st.dataframe(devedores_show, width="stretch")
+                st.dataframe(devedores_show, use_container_width=True)
                 devedores_list = devedores["Unidade"].tolist()
                 
                 # BAIXA RÁPIDA
@@ -672,8 +672,11 @@ def main():
 
         st.divider()
         st.subheader("Detalhamento e Edição")
+        # Cria a variável para limpar o índice e sumir com o aviso amarelo
+        df_ver_reset = df_ver.reset_index(drop=True)
+        
         df_editado = st.data_editor(
-            df_ver, hide_index=True, width="stretch", num_rows="dynamic",
+            df_ver_reset, hide_index=True, width="stretch", num_rows="dynamic",
             column_order=["Data", "Tipo", "Categoria", "Unidade", "Descrição", "Valor", "Status"],
             column_config={
                 "Valor": st.column_config.NumberColumn(format="R$ %.2f"),
@@ -808,5 +811,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
