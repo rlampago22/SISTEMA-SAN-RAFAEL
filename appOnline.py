@@ -701,37 +701,45 @@ def main():
     elif opcao == "Entradas/Saídas Avulsas":
         st.header("💸 Lançamentos Avulsos")
         t1, t2 = st.tabs(["Lançamento Avulso", "Definir Saldo Inicial"])
+        
         with t1:
-            with st.form("av"):
+            # MUDANÇA 1: clear_on_submit=True limpa os campos após clicar no botão
+            with st.form("av", clear_on_submit=True):
                 c1, c2 = st.columns(2)
                 dt = c1.date_input("Data", datetime.today())
                 tp = c2.selectbox("Tipo", ["Saída", "Entrada"])
-                # Sem selectbox de Categoria aqui
+                
+                # Sem categoria na tela (automático no código)
                 un = st.selectbox("Unidade / Centro de Custo", ["Condomínio (Geral)"] + lista_unis)
                 vl = st.number_input("Valor (R$)", min_value=0.0, format="%.2f")
                 ds = st.text_input("Descrição (Ex: Venda de Sucata, Compra de Material)")
                 
-                if st.form_submit_button("Salvar na Nuvem", type="primary"):
+                enviar = st.form_submit_button("Salvar na Nuvem", type="primary")
+
+                if enviar:
                     if not ds:
-                        st.error("Preencha a descrição.")
+                        st.error("⚠️ Por favor, preencha a Descrição.")
+                    elif vl == 0:
+                        st.warning("⚠️ O valor está zerado.")
                     else:
-                        # Criando o novo dado
                         novo_dado = pd.DataFrame([{
                             "ID": str(uuid.uuid4()), 
                             "Data": dt, 
                             "Tipo": tp, 
-                            "Categoria": "Lançamento Avulso", # Forçando a categoria
+                            "Categoria": "Lançamento Avulso", 
                             "Unidade": un, 
                             "Descrição": ds, 
                             "Valor": vl, 
                             "Status": "Ok"
                         }])
                         
-                        # Concatenando com o DF atualizado e salvando
                         df_final = pd.concat([df, novo_dado], ignore_index=True)
                         salvar_dados(df_final)
                         
-                        # Força a página a recarregar para mostrar o novo dado
+                        # MUDANÇA 2: Mensagem visual forte e pausa para leitura
+                        st.success("✅ Lançamento salvo com sucesso! Os campos foram limpos.")
+                        import time
+                        time.sleep(1.5) # Espera 1.5 segundos antes de recarregar
                         st.rerun()
         with t2:
             st.info("Define o saldo inicial histórico (antes de 2020).")
@@ -756,6 +764,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
