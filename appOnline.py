@@ -696,15 +696,32 @@ def main():
         t1, t2 = st.tabs(["Lançamento Avulso", "Definir Saldo Inicial"])
         with t1:
             with st.form("av"):
-                dt = st.date_input("Data", datetime.today())
-                tp = st.selectbox("Tipo", ["Saída", "Entrada"])
-                ct = st.selectbox("Categoria", lista_cats)
+                c1, c2 = st.columns(2)
+                dt = c1.date_input("Data", datetime.today())
+                tp = c2.selectbox("Tipo", ["Saída", "Entrada"])
+                
+                # Unidade continua importante para saber quem pagou/recebeu
                 un = st.selectbox("Unidade / Centro de Custo", ["Condomínio (Geral)"] + lista_unis)
-                vl = st.number_input("Valor", min_value=0.0, format="%.2f")
-                ds = st.text_input("Descrição")
+                
+                vl = st.number_input("Valor (R$)", min_value=0.0, format="%.2f")
+                ds = st.text_input("Descrição (Ex: Venda de Sucata, Compra de Material)")
+                
                 if st.form_submit_button("Salvar na Nuvem", type="primary"):
-                    novo_dado = pd.DataFrame([{"ID":str(uuid.uuid4()), "Data":dt, "Tipo":tp, "Categoria":ct, "Unidade":un, "Descrição":ds, "Valor":vl, "Status":"Ok"}])
-                    salvar_dados(pd.concat([df, novo_dado], ignore_index=True))
+                    if not ds:
+                        st.error("Por favor, preencha a Descrição.")
+                    else:
+                        # O segredo: Enviamos "Lançamento Avulso" fixo na categoria
+                        novo_dado = pd.DataFrame([{
+                            "ID": str(uuid.uuid4()), 
+                            "Data": dt, 
+                            "Tipo": tp, 
+                            "Categoria": "Lançamento Avulso",  # <--- Preenchimento automático
+                            "Unidade": un, 
+                            "Descrição": ds, 
+                            "Valor": vl, 
+                            "Status": "Ok"
+                        }])
+                        salvar_dados(pd.concat([df, novo_dado], ignore_index=True))
         with t2:
             st.info("Define o saldo inicial histórico (antes de 2020).")
             with st.form("si"):
@@ -728,3 +745,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
