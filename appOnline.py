@@ -507,62 +507,69 @@ def main():
                 st.session_state['df_preview'] = edited_df
                 st.rerun()
 
-            if st.button("🚀 Confirmar e Lançar na Nuvem", type="primary"):
+            if st.button("🚀 Confirmar e Salvar na nuvem", type="primary"):
                 novos = []
-                extras_config_df = d['extras_df'] 
-
+                
+                # --- 1. SALVAR AS ENTRADAS (O que os moradores pagaram) ---
                 for i, row in edited_df.iterrows():
                     st_r = row['Status']
-                    val_pago = float(row["Valor Pago"])
-                    val_devido = float(row["Total Devido"])
-                    diferenca = val_pago - val_devido 
-                    val_ajuste_individual = float(row["Ajuste"])
-
-                    novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Rateio Despesas (Água/Luz)", "Unidade": row['Unidade'], "Descrição": "Rateio", "Valor": row['Rateio'], "Status": st_r})
-                    if row['Fundo']>0: novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Fundo de Reserva", "Unidade": row['Unidade'], "Descrição": "Fundo", "Valor": row['Fundo'], "Status": st_r})
+                    # Aqui pegamos o valor FINAL que o morador pagou (já inclui extra, fundo, rateio)
+                    val_pago = float(forcar_numero(row["Valor Pago"]))
                     
-                    # --- BLOCO CORRIGIDO: DESPESAS EXTRAS SÃO SAÍDAS ---
-                    if not extras_config_df.empty:
-                        for _, ext_row in extras_config_df.iterrows():
-                            val_total = forcar_numero(ext_row.get("Valor Total", 0.0))
-                            desc_extra = ext_row["Descrição"]
-                            
-                            # Se a despesa existe, o condomínio pagou (SAÍDA)
-                            if val_total > 0:
-                                novos.append({
-                                    "ID": str(uuid.uuid4()), 
-                                    "Data": d['data'], 
-                                    "Tipo": "Saída",   # <--- MUDADO PARA SAÍDA
-                                    "Categoria": "Obras/Melhorias", # Categoria correta de despesa
-                                    "Unidade": "Condomínio", 
-                                    "Descrição": desc_extra, 
-                                    "Valor": val_total, 
-                                    "Status": "Ok"
-                                })
-                            
-                            aplica = False; div_por = 1
-                            if "Todos" in target: aplica = True; div_por = qtd_salas + qtd_aptos
-                            elif "Sala" in target and "Sala" in row['Unidade']: aplica = True; div_por = qtd_salas
-                            elif "Apto" in target and "Apto" in row['Unidade']: aplica = True; div_por = qtd_aptos
-                            
-                            if aplica and div_por > 0:
-                                val_indiv = val_total / div_por
-                                if val_indiv > 0:
-                                    novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": cat_extra, "Unidade": row['Unidade'], "Descrição": f"{desc_extra} ({target})", "Valor": val_indiv, "Status": st_r})
-                    if val_ajuste_individual != 0:
-                        novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Ajuste/Gorjeta", "Unidade": row['Unidade'], "Descrição": "Ajuste Manual", "Valor": val_ajuste_individual, "Status": st_r})
+                    # Vamos lançar como uma entrada única consolidada para ficar limpo no extrato
+                    # Se quiser detalhado, teria que explodir, mas consolidado evita erros de centavos
+                    novos.append({
+                        "ID": str(uuid.uuid4()), 
+                        "Data": d['data'], 
+                        "Tipo": "Entrada", 
+                        "Categoria": "Rateio Despesas (Água/Luz)", # Categoria principal
+                        "Unidade": row['Unidade'], 
+                        "Descrição": "Rateio Mensal (Cota + Extras)", 
+                        "Valor": val_pago, 
+                        "Status": st_r
+                    })
 
-                    if diferenca != 0:
-                        novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Ajuste/Gorjeta", "Unidade": row['Unidade'], "Descrição": "Pendência (Falta)" if diferenca < 0 else "Sobra Pagamento", "Valor": diferenca, "Status": st_r})
+                # --- 2. SALVAR SAÍDAS FIXAS (O que o condomínio gastou de Água/Luz) ---
+                if d['totais']['agua'] > 0: 
+                    novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Água/Esgoto", "Unidade": "Condomínio", "Descrição": "Conta Água", "Valor": d['totais']['agua'], "Status": "Ok"})
+                if d['totais']['luz'] > 0: 
+                    novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Luz", "Unidade": "Condomínio", "Descrição": "Conta Luz", "Valor": d['totais']['luz'], "Status": "Ok"})
+                if d['totais']['limp'] > 0: 
+                    novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Limpeza", "Unidade": "Condomínio", "Descrição": "Limpeza", "Valor": d['totais']['limp'], "Status": "Ok"})
                 
-                if d['totais']['agua']>0: novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Água/Esgoto", "Unidade": "Condomínio", "Descrição": "Conta Água", "Valor": d['totais']['agua'], "Status": "Ok"})
-                if d['totais']['luz']>0: novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Luz", "Unidade": "Condomínio", "Descrição": "Conta Luz", "Valor": d['totais']['luz'], "Status": "Ok"})
-                if d['totais']['limp']>0: novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Limpeza", "Unidade": "Condomínio", "Descrição": "Limpeza", "Valor": d['totais']['limp'], "Status": "Ok"})
+                # --- 3. SALVAR SAÍDAS EXTRAS (O conserto do portão, obra, etc) ---
+                # AQUI ESTAVA O ERRO: Simplificamos para pegar direto da tabela original
+                extras_config_df = d.get('extras_df', pd.DataFrame())
                 
+                if not extras_config_df.empty:
+                    for _, ext_row in extras_config_df.iterrows():
+                        val_total = forcar_numero(ext_row.get("Valor Total", 0.0))
+                        desc_extra = ext_row.get("Descrição", "Despesa Extra")
+                        
+                        # Se tem valor, é uma conta que o condomínio pagou -> SAÍDA
+                        if val_total > 0:
+                            novos.append({
+                                "ID": str(uuid.uuid4()), 
+                                "Data": d['data'], 
+                                "Tipo": "Saída",         # É SAÍDA!
+                                "Categoria": "Obras/Melhorias", # Forçamos categoria de obra
+                                "Unidade": "Condomínio", # Quem pagou foi o caixa do condomínio
+                                "Descrição": desc_extra, 
+                                "Valor": val_total, 
+                                "Status": "Ok"
+                            })
+                
+                # Salva tudo de uma vez
                 salvar_dados(pd.concat([df, pd.DataFrame(novos)], ignore_index=True))
                 
+                # Limpa a memória temporária
                 del st.session_state['dados_rateio']
                 del st.session_state['df_preview']
+                
+                # Mensagem e Recarregar
+                st.success("✅ Rateio e Despesas Extras lançados com sucesso!")
+                import time
+                time.sleep(1.5)
                 st.rerun()
 
     elif opcao == "Extrato (Dashboard)":
@@ -638,7 +645,7 @@ def main():
                     if len(val_calc) > 0: valor_divida_atual = abs(val_calc[0])
                 valor_pag = c_pay3.number_input("Valor Recebido (R$)", min_value=0.0, value=valor_divida_atual, format="%.2f")
                 
-                if st.button("Registrar Pagamento da Dívida", type="primary"):
+                ("Registrar Pagamento da Dívida", type="primary"):
                     novo_pagamento = {
                         "ID": str(uuid.uuid4()), "Data": dt_pagamento, "Tipo": "Entrada", "Categoria": "Ajuste/Gorjeta", "Unidade": uni_pag, "Descrição": f"Recuperação de Atrasados - {uni_pag}", "Valor": valor_pag, "Status": "Ok"
                     }
@@ -787,6 +794,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
