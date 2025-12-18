@@ -128,25 +128,28 @@ def formatar_real(valor):
     texto = f"R$ {valor:,.2f}"
     return texto.replace(",", "X").replace(".", ",").replace("X", ".")
 
-# --- REGRAS DE CLASSIFICAÇÃO (CORRIGIDA) ---
+# --- REGRAS DE CLASSIFICAÇÃO (CORRIGIDA E BLINDADA) ---
 def _mask_extras_rateio(df):
     if df.empty: return pd.Series([], dtype=bool)
+    
+    # 1. Proteção Absoluta: Se for Rateio de Despesas, NÃO É EXTRA.
+    # Isso impede que o código "coma" sua arrecadação principal de Água/Luz.
+    mask_protecao_rateio = df["Categoria"].astype(str).str.contains("Rateio", case=False, na=False)
+    
+    # 2. Lógica de Identificação de Extras
     desc = df["Descrição"].astype(str)
-    
-    # NOVA REGEX: Aceita "(Todos)" simples OU "(['Todos'])" antigo
-    # Procura por parênteses abrindo, espaços opcionais, colchetes opcionais, aspas opcionais...
-    regex_pattern = r"\(\s*[\[\'\"]*(?:Todos|Só Salas|Só Aptos|So Salas|So Aptos|Sala|Apto)"
-    
+    # Procura padrões como "(Todos)", "(Sala)", "(Apto)" na descrição
+    regex_pattern = r"\(\s*[\[\'\"]*(?:Todos|Só Salas|Só Aptos|So Salas|So Aptos|Sala|Apto|Unidade)"
     mask_alvo = desc.str.contains(regex_pattern, case=False, regex=True, na=False)
     
-    # Também garante que a categoria seja Taxa Extra ou similar
+    # Procura palavras-chave na Categoria
     mask_cat = df["Categoria"].astype(str).str.contains("Taxa|Extra|Obras|Melhorias|Manutenção", case=False, na=False)
     
+    # Só é entrada
     mask_base = (df["Tipo"] == "Entrada")
     
-    # Regra final: É entrada E (bateu a descrição OU bateu a categoria de taxa extra)
-    # Isso garante que mesmo se a descrição estiver diferente, a categoria "Taxa Extra" salva o dia.
-    return mask_base & (mask_alvo | mask_cat)
+    # O PULO DO GATO: É Extra SE (Bateu Descrição OU Categoria) E (NÃO for Rateio)
+    return mask_base & (mask_alvo | mask_cat) & (~mask_protecao_rateio)
 
 # --- PDF ---
 def gerar_relatorio_prestacao(df_completo, mes_num, mes_nome, ano_ref, lista_unis_config):
@@ -774,6 +777,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
