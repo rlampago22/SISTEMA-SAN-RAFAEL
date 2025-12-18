@@ -50,21 +50,22 @@ def forcar_numero_bruto(valor):
     except:
         return 0.0
 
+# --- FUNÇÕES BÁSICAS (ATUALIZADAS PARA CORRIGIR SOBREPOSIÇÃO) ---
+
 def get_conexao():
-    # Procura nos secrets primeiro
     return st.connection("gsheets", type=GSheetsConnection)
 
 def carregar_dados():
     conn = get_conexao()
     try:
-        # Lê a aba 'Dados'
-        df = conn.read(worksheet=WORKSHEET_DADOS)
+        # ttl=0 obriga a ler do Google SEMPRE, sem usar memória velha
+        df = conn.read(worksheet=WORKSHEET_DADOS, ttl=0)
         
         cols_esperadas = ["ID", "Data", "Tipo", "Categoria", "Unidade", "Descrição", "Valor", "Status"]
         if df.empty or len(df.columns) < 2:
             return pd.DataFrame(columns=cols_esperadas)
         
-        # Garante que ID seja string
+        # Garante que ID seja string e limpa vazios
         df["ID"] = df["ID"].astype(str)
         df["ID"] = df["ID"].apply(lambda x: str(uuid.uuid4()) if pd.isna(x) or x == "nan" or x == "" else x)
             
@@ -74,7 +75,7 @@ def carregar_dados():
         # Aplica a correção numérica
         df["Valor"] = df["Valor"].apply(forcar_numero_bruto)
         
-        df["Categoria"] = df["Categoria"].fillna("")
+        df["Categoria"] = df["Categoria"].fillna("Lançamento Avulso") # Garante que nada fique vazio
         df["Descrição"] = df["Descrição"].fillna("")
         df["Unidade"] = df["Unidade"].astype(str).str.strip()
         
@@ -84,17 +85,23 @@ def carregar_dados():
             
         return df
     except Exception as e:
-        st.error(f"Erro ao conectar com Google Sheets: {e}")
+        # Se der erro, tenta devolver um vazio para não travar a tela, mas avisa
+        # st.error(f"Erro de conexão: {e}") 
         return pd.DataFrame(columns=["ID", "Data", "Tipo", "Categoria", "Unidade", "Descrição", "Valor", "Status"])
 
 def salvar_dados(df):
     conn = get_conexao()
     if not df.empty:
         df_save = df.copy()
+        # Converte data para string para o Google não confundir formato
         df_save["Data"] = pd.to_datetime(df_save["Data"]).dt.strftime('%Y-%m-%d')
+        
         conn.update(data=df_save, worksheet=WORKSHEET_DADOS)
+        
+        # O PULO DO GATO: Limpa o cache imediatamente após salvar
+        st.cache_data.clear()
         st.toast("Salvo na nuvem com sucesso!", icon="☁️")
-
+        
 def carregar_config():
     conn = get_conexao()
     try:
@@ -699,29 +706,33 @@ def main():
                 c1, c2 = st.columns(2)
                 dt = c1.date_input("Data", datetime.today())
                 tp = c2.selectbox("Tipo", ["Saída", "Entrada"])
-                
-                # Unidade continua importante para saber quem pagou/recebeu
+                # Sem selectbox de Categoria aqui
                 un = st.selectbox("Unidade / Centro de Custo", ["Condomínio (Geral)"] + lista_unis)
-                
                 vl = st.number_input("Valor (R$)", min_value=0.0, format="%.2f")
                 ds = st.text_input("Descrição (Ex: Venda de Sucata, Compra de Material)")
                 
                 if st.form_submit_button("Salvar na Nuvem", type="primary"):
                     if not ds:
-                        st.error("Por favor, preencha a Descrição.")
+                        st.error("Preencha a descrição.")
                     else:
-                        # O segredo: Enviamos "Lançamento Avulso" fixo na categoria
+                        # Criando o novo dado
                         novo_dado = pd.DataFrame([{
                             "ID": str(uuid.uuid4()), 
                             "Data": dt, 
                             "Tipo": tp, 
-                            "Categoria": "Concerto",  # <--- Preenchimento automático
+                            "Categoria": "Lançamento Avulso", # Forçando a categoria
                             "Unidade": un, 
                             "Descrição": ds, 
                             "Valor": vl, 
                             "Status": "Ok"
                         }])
-                        salvar_dados(pd.concat([df, novo_dado], ignore_index=True))
+                        
+                        # Concatenando com o DF atualizado e salvando
+                        df_final = pd.concat([df, novo_dado], ignore_index=True)
+                        salvar_dados(df_final)
+                        
+                        # Força a página a recarregar para mostrar o novo dado
+                        st.rerun()
         with t2:
             st.info("Define o saldo inicial histórico (antes de 2020).")
             with st.form("si"):
@@ -745,5 +756,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
