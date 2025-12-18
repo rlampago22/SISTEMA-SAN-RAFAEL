@@ -381,15 +381,16 @@ def main():
             val_fundo = cf1.number_input("Fundo de Caixa (Valor Unitário)", min_value=0.0, format="%.2f")
             with cf2:
                 st.write("Tabela de Despesas Extras:")
+                # MUDANÇA 1: Tirei "Categoria" da lista de colunas inicial
                 if 'extras_editor' not in st.session_state:
-                    st.session_state['extras_editor'] = pd.DataFrame(columns=["Descrição", "Categoria", "Valor Total", "Ratear Para"])
+                    st.session_state['extras_editor'] = pd.DataFrame(columns=["Descrição", "Valor Total", "Ratear Para"])
                 
                 df_extras_input = st.data_editor(
                     st.session_state['extras_editor'],
                     num_rows="dynamic",
                     column_config={
                         "Descrição": st.column_config.TextColumn(required=True, width="medium"),
-                        "Categoria": st.column_config.SelectboxColumn(options=lista_cats, required=True, width="medium"),
+                        # MUDANÇA 2: Removi a configuração da coluna Categoria inteira daqui
                         "Valor Total": st.column_config.NumberColumn(format="R$ %.2f", required=True),
                         "Ratear Para": st.column_config.SelectboxColumn(options=["Todos", "Só Salas", "Só Aptos"], required=True, default="Todos")
                     },
@@ -516,16 +517,19 @@ def main():
                             val_total = forcar_numero(ext_row.get("Valor Total", 0.0))
                             target = str(ext_row["Ratear Para"])
                             desc_extra = ext_row["Descrição"]
-                            cat_extra = ext_row["Categoria"] 
+                            
+                            # MUDANÇA 3: Definimos fixo, pois não vem mais da tabela
+                            cat_extra = "Taxa Extra" 
+                            
                             aplica = False; div_por = 1
                             if "Todos" in target: aplica = True; div_por = qtd_salas + qtd_aptos
                             elif "Sala" in target and "Sala" in row['Unidade']: aplica = True; div_por = qtd_salas
                             elif "Apto" in target and "Apto" in row['Unidade']: aplica = True; div_por = qtd_aptos
+                            
                             if aplica and div_por > 0:
                                 val_indiv = val_total / div_por
                                 if val_indiv > 0:
                                     novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": cat_extra, "Unidade": row['Unidade'], "Descrição": f"{desc_extra} ({target})", "Valor": val_indiv, "Status": st_r})
-
                     if val_ajuste_individual != 0:
                         novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Ajuste/Gorjeta", "Unidade": row['Unidade'], "Descrição": "Ajuste Manual", "Valor": val_ajuste_individual, "Status": st_r})
 
@@ -764,6 +768,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
