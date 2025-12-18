@@ -715,7 +715,7 @@ def main():
                             "ID": str(uuid.uuid4()), 
                             "Data": dt, 
                             "Tipo": tp, 
-                            "Categoria": "Lançamento Avulso",  # <--- Preenchimento automático
+                            "Categoria": "Concerto",  # <--- Preenchimento automático
                             "Unidade": un, 
                             "Descrição": ds, 
                             "Valor": vl, 
@@ -745,4 +745,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
