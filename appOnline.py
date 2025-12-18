@@ -391,7 +391,8 @@ list_meses_inv = {"Jan":1, "Fev":2, "Mar":3, "Abr":4, "Mai":5, "Jun":6, "Jul":7,
 def main():
     st.sidebar.title("🏢 Edifício San Rafael")
     st.sidebar.divider()
-    opcao = st.sidebar.radio("Navegar:", ["Calculadora de Rateio", "Extrato (Dashboard)", "Entradas/Saídas Avulsas", "Cadastros"])
+    # MUDANÇA: Aba "Cadastros" removida do menu
+    opcao = st.sidebar.radio("Navegar:", ["Calculadora de Rateio", "Extrato (Dashboard)", "Entradas/Saídas Avulsas"])
     
     # ⚠️ Carrega sempre do Google Sheets
     df = carregar_dados()
@@ -425,12 +426,17 @@ def main():
                 if 'extras_editor' not in st.session_state:
                     st.session_state['extras_editor'] = pd.DataFrame(columns=["Descrição", "Categoria", "Valor Total", "Ratear Para"])
                 
+                # MUDANÇA: Filtro para ocultar Água, Luz e Limpeza nos Extras
+                bloqueadas_extras = ["Água", "Luz", "Limpeza Escadas", "Pagto Água/Esgoto", "Pagto Luz", "Pagto Limpeza"]
+                lista_cats_extras = [x for x in lista_cats if x not in bloqueadas_extras]
+
                 df_extras_input = st.data_editor(
                     st.session_state['extras_editor'],
                     num_rows="dynamic",
                     column_config={
                         "Descrição": st.column_config.TextColumn(required=True, width="medium"),
-                        "Categoria": st.column_config.SelectboxColumn(options=lista_cats, required=True, width="medium"),
+                        # Usando a lista filtrada aqui
+                        "Categoria": st.column_config.SelectboxColumn(options=lista_cats_extras, required=True, width="medium"),
                         "Valor Total": st.column_config.NumberColumn(format="R$ %.2f", required=True),
                         "Ratear Para": st.column_config.SelectboxColumn(options=["Todos", "Só Salas", "Só Aptos"], required=True, default="Todos")
                     },
@@ -672,11 +678,15 @@ def main():
 
         st.divider()
         st.subheader("Detalhamento e Edição")
+        
         # Cria a variável para limpar o índice e sumir com o aviso amarelo
         df_ver_reset = df_ver.reset_index(drop=True)
         
         df_editado = st.data_editor(
-            df_ver_reset, hide_index=True, width="stretch", num_rows="dynamic",
+            df_ver_reset, 
+            hide_index=True, 
+            width="stretch", # CORREÇÃO DE LARGURA
+            num_rows="dynamic",
             column_order=["Data", "Tipo", "Categoria", "Unidade", "Descrição", "Valor", "Status"],
             column_config={
                 "Valor": st.column_config.NumberColumn(format="R$ %.2f"),
@@ -798,6 +808,7 @@ def main():
                     salvar_dados(pd.concat([df, novo_dado], ignore_index=True))
 
     elif opcao == "Cadastros":
+        # Esta aba foi ocultada do menu, mas o código permanece para manutenção
         st.header("⚙️ Configurações")
         c1, c2 = st.columns(2)
         d_c = c1.data_editor(pd.DataFrame({"Categoria":lista_cats}), num_rows="dynamic", width="stretch", key="ed_cats")
@@ -811,6 +822,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
