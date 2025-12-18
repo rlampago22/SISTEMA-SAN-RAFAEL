@@ -521,14 +521,24 @@ def main():
                     novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Rateio Despesas (Água/Luz)", "Unidade": row['Unidade'], "Descrição": "Rateio", "Valor": row['Rateio'], "Status": st_r})
                     if row['Fundo']>0: novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Fundo de Reserva", "Unidade": row['Unidade'], "Descrição": "Fundo", "Valor": row['Fundo'], "Status": st_r})
                     
+                    # --- BLOCO CORRIGIDO: DESPESAS EXTRAS SÃO SAÍDAS ---
                     if not extras_config_df.empty:
                         for _, ext_row in extras_config_df.iterrows():
                             val_total = forcar_numero(ext_row.get("Valor Total", 0.0))
-                            target = str(ext_row["Ratear Para"])
                             desc_extra = ext_row["Descrição"]
                             
-                            # MUDANÇA 3: Definimos fixo, pois não vem mais da tabela
-                            cat_extra = "Taxa Extra" 
+                            # Se a despesa existe, o condomínio pagou (SAÍDA)
+                            if val_total > 0:
+                                novos.append({
+                                    "ID": str(uuid.uuid4()), 
+                                    "Data": d['data'], 
+                                    "Tipo": "Saída",   # <--- MUDADO PARA SAÍDA
+                                    "Categoria": "Obras/Melhorias", # Categoria correta de despesa
+                                    "Unidade": "Condomínio", 
+                                    "Descrição": desc_extra, 
+                                    "Valor": val_total, 
+                                    "Status": "Ok"
+                                })
                             
                             aplica = False; div_por = 1
                             if "Todos" in target: aplica = True; div_por = qtd_salas + qtd_aptos
@@ -777,6 +787,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
