@@ -618,11 +618,11 @@ def main():
             g1, g2 = st.columns(2)
             totais = df_ver.groupby("Tipo")["Valor"].sum().reset_index()
             fig1 = px.bar(totais, x="Tipo", y="Valor", color="Tipo", title="Receitas vs Despesas", color_discrete_map={"Entrada": "#2ecc71", "Saída": "#e74c3c"}, height=300)
-            g1.plotly_chart(fig1, use_container_width=True)
+            g1.plotly_chart(fig1, width="stretch")
             df_ent = df_ver[df_ver["Tipo"]=="Entrada"]
             if not df_ent.empty:
                 fig2 = px.pie(df_ent, names="Status", values="Valor", title="Status de Recebimento", color="Status", color_discrete_map={"Ok": "#3498db", "Pendente": "#f1c40f"}, height=300)
-                g2.plotly_chart(fig2, use_container_width=True)
+                g2.plotly_chart(fig2, width="stretch")
         else: st.info("Sem dados para exibir.")
         
         # --- PAINEL DE INADIMPLÊNCIA ---
@@ -643,7 +643,7 @@ def main():
                 
                 devedores_show = devedores.rename(columns={"Valor": "Saldo Devedor"}).copy()
                 devedores_show["Saldo Devedor"] = devedores_show["Saldo Devedor"].apply(formatar_real)
-                st.dataframe(devedores_show, use_container_width=True)
+                st.dataframe(devedores_show, width="stretch")
                 devedores_list = devedores["Unidade"].tolist()
                 
                 # BAIXA RÁPIDA
@@ -673,7 +673,7 @@ def main():
         st.divider()
         st.subheader("Detalhamento e Edição")
         df_editado = st.data_editor(
-            df_ver, hide_index=True, use_container_width=True, num_rows="dynamic",
+            df_ver, hide_index=True, width="stretch", num_rows="dynamic",
             column_order=["Data", "Tipo", "Categoria", "Unidade", "Descrição", "Valor", "Status"],
             column_config={
                 "Valor": st.column_config.NumberColumn(format="R$ %.2f"),
@@ -797,8 +797,8 @@ def main():
     elif opcao == "Cadastros":
         st.header("⚙️ Configurações")
         c1, c2 = st.columns(2)
-        d_c = c1.data_editor(pd.DataFrame({"Categoria":lista_cats}), num_rows="dynamic", use_container_width=True, key="ed_cats")
-        d_u = c2.data_editor(pd.DataFrame({"Unidade":lista_unis}), num_rows="dynamic", use_container_width=True, key="ed_unis")
+        d_c = c1.data_editor(pd.DataFrame({"Categoria":lista_cats}), num_rows="dynamic", width="stretch", key="ed_cats")
+        d_u = c2.data_editor(pd.DataFrame({"Unidade":lista_unis}), num_rows="dynamic", width="stretch", key="ed_unis")
         if st.button("Salvar Configurações", type="primary"):
             cats = d_c["Categoria"].tolist(); unis = d_u["Unidade"].tolist()
             max_len = max(len(cats), len(unis))
@@ -808,3 +808,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
