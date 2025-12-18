@@ -12,40 +12,29 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="Edifício San Rafael", layout="wide", page_icon="🏢")
 
 # --- CONFIGURAÇÃO DA CONEXÃO E URL ---
-# ⚠️ O link da planilha virá dos Secrets, mas deixamos uma variável de apoio
-# O Streamlit injeta as credenciais automaticamente via st.connection
+# ⚠️ IMPORTANTE: Substitua pelo link da sua planilha
+url_planilha = "https://docs.google.com/spreadsheets/d/1pwcXngnXhtmcxi0ucfl_ajKza5V-Ij_PgQ6Ce6jFpLM/edit?usp=sharing"
 
-# Nomes exatos das abas
+# Nomes exatos das abas que criamos no Google Sheets
 WORKSHEET_DADOS = "Dados"
 WORKSHEET_CONFIG = "Config"
 
-# --- ARQUITETURA DE PASTAS ---
+# --- ARQUITETURA DE PASTAS (Apenas para PDFs temporários) ---
 PASTA_RELATORIOS = 'relatorios'
 os.makedirs(PASTA_RELATORIOS, exist_ok=True)
 
 # --- FUNÇÕES BÁSICAS ---
 def forcar_numero_bruto(valor):
-    # Se já for número (int ou float), retorna direto (Google Sheets às vezes manda pronto)
-    if isinstance(valor, (int, float)):
-        return float(valor)
-    
     try:
         if pd.isna(valor): return 0.0
         s_val = str(valor).strip()
-        # Remove R$ e espaços
+        # Remove simbolo de moeda se houver
         s_val = s_val.replace("R$", "").replace("r$", "").strip()
-        
-        # Lógica para detectar formato brasileiro (1.000,00) vs Americano (1,000.00)
-        # Se tem vírgula no final (ex: ,00 ou ,5), é BR.
-        if ',' in s_val and ('.' in s_val or len(s_val.split(',')[-1]) <= 2):
+        if ',' in s_val and '.' in s_val: 
             s_val = s_val.replace('.', '').replace(',', '.')
         elif ',' in s_val: 
             s_val = s_val.replace(',', '.')
-            
-        # Remove qualquer coisa que não seja número, ponto ou sinal de menos
         s_val = re.sub(r'[^\d\.-]', '', s_val)
-        
-        if not s_val: return 0.0
         return float(s_val)
     except:
         return 0.0
@@ -101,12 +90,15 @@ def salvar_dados(df):
         # O PULO DO GATO: Limpa o cache imediatamente após salvar
         st.cache_data.clear()
         st.toast("Salvo na nuvem com sucesso!", icon="☁️")
-        
+    else:
+        st.warning("Nada para salvar.")
+
 def carregar_config():
     conn = get_conexao()
     try:
-        df = conn.read(worksheet=WORKSHEET_CONFIG)
+        df = conn.read(spreadsheet=url_planilha, worksheet=WORKSHEET_CONFIG)
         if df.empty:
+             # Fallback se a aba config estiver vazia
             dados_iniciais = {
                 "Categorias": ["Rateio Despesas (Água/Luz)", "Fundo de Reserva", "Taxa Extra", "Ajuste/Gorjeta", "Saldo Inicial", "Pagto Água/Esgoto", "Pagto Luz", "Pagto Limpeza", "Manutenção", "Obras/Melhorias"],
                 "Unidades": ["Apto 101", "Apto 201", "Apto 202", "Apto 301", "Sala 01", "Sala 02", "Sala 03", "Sala 04"]
@@ -118,7 +110,7 @@ def carregar_config():
 
 def salvar_config(df):
     conn = get_conexao()
-    conn.update(data=df, worksheet=WORKSHEET_CONFIG)
+    conn.update(spreadsheet=url_planilha, data=df, worksheet=WORKSHEET_CONFIG)
     st.toast("Configurações salvas!", icon="⚙️")
 
 def forcar_numero(valor):
@@ -128,33 +120,21 @@ def formatar_real(valor):
     texto = f"R$ {valor:,.2f}"
     return texto.replace(",", "X").replace(".", ",").replace("X", ".")
 
-# --- REGRAS DE CLASSIFICAÇÃO (CORRIGIDA E BLINDADA) ---
-def _mask_extras_rateio(df):
-    if df.empty: return pd.Series([], dtype=bool)
-    
-    # 1. Proteção Absoluta: Se for Rateio de Despesas, NÃO É EXTRA.
-    # Isso impede que o código "coma" sua arrecadação principal de Água/Luz.
-    mask_protecao_rateio = df["Categoria"].astype(str).str.contains("Rateio", case=False, na=False)
-    
-    # 2. Lógica de Identificação de Extras
-    desc = df["Descrição"].astype(str)
-    # Procura padrões como "(Todos)", "(Sala)", "(Apto)" na descrição
-    regex_pattern = r"\(\s*[\[\'\"]*(?:Todos|Só Salas|Só Aptos|So Salas|So Aptos|Sala|Apto|Unidade)"
-    mask_alvo = desc.str.contains(regex_pattern, case=False, regex=True, na=False)
-    
-    # Procura palavras-chave na Categoria
-    mask_cat = df["Categoria"].astype(str).str.contains("Taxa|Extra|Obras|Melhorias|Manutenção", case=False, na=False)
-    
-    # Só é entrada
-    mask_base = (df["Tipo"] == "Entrada")
-    
-    # O PULO DO GATO: É Extra SE (Bateu Descrição OU Categoria) E (NÃO for Rateio)
-    return mask_base & (mask_alvo | mask_cat) & (~mask_protecao_rateio)
+# --- REGRAS DE CLASSIFICAÇÃO ---
+def _mask_extras_rateio(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series([], dtype=bool)
 
-# --- PDF ---
+    desc = df["Descrição"].astype(str)
+    mask_alvo = desc.str.contains(r"\(\s*\['?(Todos|Só Salas|Só Aptos|So Salas|So Aptos)", case=False, regex=True, na=False)
+    mask_base = (
+        (df["Tipo"] == "Entrada")
+        & (~df["Categoria"].astype(str).str.contains("Rateio|Fundo|Ajuste|Saldo", case=False, regex=True, na=False))
+    )
+    return mask_base & mask_alvo
+
+# --- PDF (Lógica Mantida, salva em pasta temporária na nuvem) ---
 def gerar_relatorio_prestacao(df_completo, mes_num, mes_nome, ano_ref, lista_unis_config):
-    # ... (MANTENDO A LÓGICA DO PDF IGUAL - Resumido aqui para caber, mas no seu copie tudo)
-    # Vou replicar a função inteira para garantir que funcione ao copiar e colar
     df_completo["Data"] = pd.to_datetime(df_completo["Data"])
     
     if ano_ref == "Todos":
@@ -204,6 +184,7 @@ def gerar_relatorio_prestacao(df_completo, mes_num, mes_nome, ano_ref, lista_uni
 
     # 1. SAÍDAS
     df_saidas_mes = df_mes[df_mes["Tipo"]=="Saída"]
+    
     mask_agua = df_saidas_mes["Categoria"].str.contains("Água", case=False) & ~df_saidas_mes["Categoria"].str.contains("Cx|Caixa|Conserto", case=False)
     mask_luz = df_saidas_mes["Categoria"].str.contains("Luz", case=False) & ~df_saidas_mes["Categoria"].str.contains("Conserto", case=False)
     mask_limpeza = df_saidas_mes["Categoria"].str.contains("Limpeza", case=False) & ~df_saidas_mes["Categoria"].str.contains("Cx|Caixa|Conserto|Manutenção", case=False)
@@ -211,6 +192,7 @@ def gerar_relatorio_prestacao(df_completo, mes_num, mes_nome, ano_ref, lista_uni
     gastos_agua = df_saidas_mes[mask_agua]["Valor"].sum()
     gastos_luz = df_saidas_mes[mask_luz]["Valor"].sum()
     gastos_limp = df_saidas_mes[mask_limpeza]["Valor"].sum()
+    
     df_outros_manuais = df_saidas_mes[~(mask_agua | mask_luz | mask_limpeza)]
     total_outros_manuais = df_outros_manuais["Valor"].sum()
 
@@ -230,20 +212,24 @@ def gerar_relatorio_prestacao(df_completo, mes_num, mes_nome, ano_ref, lista_uni
     pdf.set_font("Arial", 'B', size=10)
     pdf.set_fill_color(240, 240, 240)
     pdf.cell(190, 6, "1. DESPESAS REALIZADAS (SAÍDAS DO CAIXA)", 1, 1, 'L', 1)
+    
     pdf.set_font("Arial", size=9)
     pdf.cell(140, 5, "Água + Esgoto", 1); pdf.cell(50, 5, formatar_real(gastos_agua), 1, 1, 'R')
     pdf.cell(140, 5, "Luz (Área Comum)", 1); pdf.cell(50, 5, formatar_real(gastos_luz), 1, 1, 'R')
     pdf.cell(140, 5, "Limpeza Prédio", 1); pdf.cell(50, 5, formatar_real(gastos_limp), 1, 1, 'R')
+    
     if not df_outros_manuais.empty:
         for desc, val in df_outros_manuais.groupby("Descrição")["Valor"].sum().items():
             pdf.cell(140, 5, str(desc), 1); pdf.cell(50, 5, formatar_real(val), 1, 1, 'R')
+
     for nome, val in extras_para_saida:
         pdf.cell(140, 5, f"{nome} (Extra)", 1); pdf.cell(50, 5, formatar_real(val), 1, 1, 'R')
+
     pdf.set_font("Arial", 'B', size=9)
     pdf.cell(140, 5, "TOTAL SAÍDAS:", 1); pdf.cell(50, 5, formatar_real(total_saidas_final), 1, 1, 'R')
     pdf.ln(3)
 
-    # 4. OUTRAS RECEITAS
+     # 4. OUTRAS RECEITAS (ENTRADAS AVULSAS)
     mask_outras_receitas = (
         (df_mes["Tipo"] == "Entrada")
         & (df_mes["Valor"] > 0.01)
@@ -252,64 +238,91 @@ def gerar_relatorio_prestacao(df_completo, mes_num, mes_nome, ano_ref, lista_uni
         & (~_mask_extras_rateio(df_mes))
     )
     df_outras_receitas = df_mes[mask_outras_receitas]
+
     if not df_outras_receitas.empty:
         pdf.set_font("Arial", 'B', size=10)
         pdf.set_fill_color(240, 240, 240)
         pdf.cell(190, 6, "4. OUTRAS RECEITAS (ENTRADAS AVULSAS)", 1, 1, 'L', 1)
         pdf.set_font("Arial", size=9)
+
         grp_rec = df_outras_receitas.groupby(["Descrição"])["Valor"].sum()
         for (desc), val in grp_rec.items():
-            label = str(desc).strip() if not pd.isna(desc) else ""
-            pdf.cell(140, 5, label, 1); pdf.cell(50, 5, formatar_real(val), 1, 1, 'R')
+            desc_txt = str(desc).strip() if not pd.isna(desc) else ""
+            label = desc_txt
+            pdf.cell(140, 5, label, 1)
+            pdf.cell(50, 5, formatar_real(val), 1, 1, 'R')
+
+        total_outras = df_outras_receitas["Valor"].sum()
         pdf.set_font("Arial", 'B', size=9)
-        pdf.cell(140, 5, "TOTAL OUTRAS RECEITAS:", 1); pdf.cell(50, 5, formatar_real(df_outras_receitas["Valor"].sum()), 1, 1, 'R')
+        pdf.cell(140, 5, "TOTAL OUTRAS RECEITAS:", 1)
+        pdf.cell(50, 5, formatar_real(total_outras), 1, 1, 'R')
         pdf.ln(3)
 
     def bloco_detalhado(titulo, tipo_unidade, qtd, agua_pct, usa_luz_limp, lista_unidades_grupo):
         pdf.set_fill_color(230, 230, 230)
         df_u = df_mes[(df_mes["Tipo"]=="Entrada") & (df_mes["Unidade"].str.contains(tipo_unidade))]
         total_geral_bloco = df_u["Valor"].sum()
+
         val_agua_total_grupo = gastos_agua * agua_pct
         unit_agua = val_agua_total_grupo / qtd if qtd > 0 else 0
+        
         val_luz_grupo = gastos_luz if usa_luz_limp else 0
         unit_luz = val_luz_grupo / qtd if qtd > 0 else 0
+        
         val_limp_grupo = gastos_limp if usa_luz_limp else 0
         unit_limp = val_limp_grupo / qtd if qtd > 0 else 0
+        
         total_fundo_recebido = df_u[df_u["Categoria"] == "Fundo de Reserva"]["Valor"].sum()
         unit_fundo = total_fundo_recebido / qtd if qtd > 0 else 0
+        
         df_extras = df_u[~df_u["Categoria"].str.contains("Rateio|Fundo|Ajuste|Saldo")]
-        unit_extra_estimado = df_extras["Valor"].sum() / qtd if qtd > 0 else 0
+        total_extras_recebido = df_extras["Valor"].sum()
+        unit_extra_estimado = total_extras_recebido / qtd if qtd > 0 else 0
+        
         df_ajustes_all = df_u[df_u["Categoria"].str.contains("Ajuste")]
+
         valor_cota_final = unit_agua + unit_luz + unit_limp + unit_fundo + unit_extra_estimado
 
         pdf.set_font("Arial", 'B', size=10)
+        txt_valor_cota = f"Valor por Unidade: {formatar_real(valor_cota_final)}"
         pdf.cell(130, 6, titulo, 1, 0, 'L', 1)
         pdf.set_text_color(0, 0, 150)
-        pdf.cell(60, 6, f"Valor por Unidade: {formatar_real(valor_cota_final)}", 1, 1, 'R', 1)
+        pdf.cell(60, 6, txt_valor_cota, 1, 1, 'R', 1)
         pdf.set_text_color(0, 0, 0)
 
         pdf.set_font("Arial", 'B', size=8)
         pdf.cell(190, 5, "COMPOSIÇÃO (Rateio + Fundo + Extras)", 0, 1, 'L')
         pdf.set_font("Arial", size=8)
-        pdf.cell(140, 4, f"{int(agua_pct*100)}% Água/Esgoto ({formatar_real(unit_agua)} x {qtd} unid)", "B"); pdf.cell(50, 4, formatar_real(val_agua_total_grupo), "B", 1, 'R')
+
+        desc_agua = f"{int(agua_pct*100)}% Água/Esgoto ({formatar_real(unit_agua)} x {qtd} unid)"
+        pdf.cell(140, 4, desc_agua, "B"); pdf.cell(50, 4, formatar_real(val_agua_total_grupo), "B", 1, 'R')
+        
         if usa_luz_limp:
             pdf.cell(140, 4, f"Luz Condomínio ({formatar_real(unit_luz)} x {qtd} unid)", "B"); pdf.cell(50, 4, formatar_real(val_luz_grupo), "B", 1, 'R')
             pdf.cell(140, 4, f"Limpeza Prédio ({formatar_real(unit_limp)} x {qtd} unid)", "B"); pdf.cell(50, 4, formatar_real(val_limp_grupo), "B", 1, 'R')
+
         if total_fundo_recebido > 0:
             pdf.cell(140, 4, f"Fundo de Reserva ({formatar_real(unit_fundo)} x {qtd} unid)", "B"); pdf.cell(50, 4, formatar_real(total_fundo_recebido), "B", 1, 'R')
+
         if not df_extras.empty:
-            pdf.ln(1); pdf.set_font("Arial", 'B', size=8); pdf.cell(190, 5, "DESPESAS EXTRAS", 0, 1, 'L'); pdf.set_font("Arial", size=8)
+            pdf.ln(1); pdf.set_font("Arial", 'B', size=8)
+            pdf.cell(190, 5, "DESPESAS EXTRAS", 0, 1, 'L'); pdf.set_font("Arial", size=8)
             extras_group = df_extras.groupby("Descrição")["Valor"].sum().reset_index()
             for _, row in extras_group.iterrows():
                 nome = re.sub(r"[\[\]']", "", str(row['Descrição'])).replace("Extra: ", "").strip().split("(")[0].strip()
-                pdf.cell(140, 4, f"{nome} ({formatar_real(row['Valor']/qtd if qtd>0 else 0)} x {qtd} unid)", "B"); pdf.cell(50, 4, formatar_real(row['Valor']), "B", 1, 'R')
+                val_tot = row['Valor']
+                unit_ext = val_tot / qtd if qtd > 0 else 0
+                pdf.cell(140, 4, f"{nome} ({formatar_real(unit_ext)} x {qtd} unid)", "B"); pdf.cell(50, 4, formatar_real(val_tot), "B", 1, 'R')
+
         if not df_ajustes_all.empty:
-            pdf.ln(1); pdf.set_font("Arial", 'B', size=8); pdf.cell(190, 5, "AJUSTES / RECUPERAÇÕES", 0, 1, 'L'); pdf.set_font("Arial", size=8)
+            pdf.ln(1); pdf.set_font("Arial", 'B', size=8)
+            pdf.cell(190, 5, "AJUSTES / RECUPERAÇÕES", 0, 1, 'L'); pdf.set_font("Arial", size=8)
             for _, row in df_ajustes_all.iterrows():
                 if abs(row['Valor']) > 0.01:
                     pdf.cell(140, 4, f"{row['Unidade']}: {row['Descrição']}", "B"); pdf.cell(50, 4, formatar_real(row['Valor']), "B", 1, 'R')
+
         pdf.ln(2)
-        
+
         pdf.set_font("Arial", 'B', size=8)
         pdf.set_fill_color(220, 220, 220)
         pdf.cell(40, 5, "UNIDADE", 1, 0, 'C', 1)
@@ -319,18 +332,32 @@ def gerar_relatorio_prestacao(df_completo, mes_num, mes_nome, ano_ref, lista_uni
 
         for unidade_nome in lista_unidades_grupo:
             entradas_uni = df_u[df_u["Unidade"] == unidade_nome]["Valor"].sum()
-            status_txt = ""; cor_texto = (0, 0, 0)
+            status_txt = ""
+            cor_texto = (0, 0, 0)
+            
             if entradas_uni >= (valor_cota_final - 0.10):
-                status_txt = "Pagamento Integral"; cor_texto = (0, 100, 0)
-                if entradas_uni > (valor_cota_final + 1.00): status_txt = "Pagamento Integral (+ Ajustes)"; cor_texto = (0, 0, 150)
+                status_txt = "Pagamento Integral"
+                cor_texto = (0, 100, 0)
+                if entradas_uni > (valor_cota_final + 1.00):
+                    status_txt = "Pagamento Integral (+ Ajustes)"
+                    cor_texto = (0, 0, 150)
             elif entradas_uni > 0:
-                status_txt = f"Parcial (Falta {formatar_real(valor_cota_final - entradas_uni)})"; cor_texto = (200, 100, 0)
+                falta = valor_cota_final - entradas_uni
+                status_txt = f"Parcial (Falta {formatar_real(falta)})"
+                cor_texto = (200, 100, 0)
             else:
-                status_txt = "EM ABERTO"; cor_texto = (180, 0, 0)
-            pdf.set_text_color(0, 0, 0); pdf.cell(40, 5, f"  {unidade_nome}", 1); pdf.cell(40, 5, formatar_real(entradas_uni), 1, 0, 'R')
-            pdf.set_text_color(*cor_texto); pdf.cell(110, 5, f"  {status_txt}", 1, 1)
+                status_txt = "EM ABERTO"
+                cor_texto = (180, 0, 0)
+
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(40, 5, f"  {unidade_nome}", 1)
+            pdf.cell(40, 5, formatar_real(entradas_uni), 1, 0, 'R')
+            pdf.set_text_color(*cor_texto)
+            pdf.cell(110, 5, f"  {status_txt}", 1, 1)
         
-        pdf.set_text_color(0, 0, 0); pdf.ln(1); pdf.set_font("Arial", 'B', size=9)
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(1)
+        pdf.set_font("Arial", 'B', size=9)
         pdf.cell(140, 6, "TOTAL ARRECADADO GRUPO:", 0, 0, 'R'); pdf.cell(50, 6, formatar_real(total_geral_bloco), 1, 1, 'R')
         pdf.ln(3)
 
@@ -344,9 +371,11 @@ def gerar_relatorio_prestacao(df_completo, mes_num, mes_nome, ano_ref, lista_uni
     pdf.cell(190, 8, "RESUMO DE CAIXA (FLUXO)", 0, 1, 'C')
     pdf.set_font("Arial", 'B', size=9)
     pdf.cell(100, 6, "DESCRIÇÃO", 1, 0, 'C', 1); pdf.cell(90, 6, "VALOR", 1, 1, 'C', 1)
+    
     pdf.set_text_color(100, 100, 100); pdf.cell(100, 6, "SALDO ANTERIOR", 1); pdf.cell(90, 6, formatar_real(saldo_anterior_exibicao), 1, 1, 'R')
     pdf.set_text_color(0, 100, 0); pdf.cell(100, 6, "(+) ENTRADAS TOTAIS", 1); pdf.cell(90, 6, formatar_real(entradas_periodo), 1, 1, 'R')
     pdf.set_text_color(180, 0, 0); pdf.cell(100, 6, "(-) SAÍDAS", 1); pdf.cell(90, 6, formatar_real(total_saidas_final), 1, 1, 'R')
+    
     if saldo_final_caixa >= 0: pdf.set_text_color(0, 0, 200)
     else: pdf.set_text_color(255, 0, 0)
     pdf.cell(100, 6, "(=) SALDO ATUAL EM CAIXA", 1); pdf.cell(90, 6, formatar_real(saldo_final_caixa), 1, 1, 'R')
@@ -356,12 +385,15 @@ def gerar_relatorio_prestacao(df_completo, mes_num, mes_nome, ano_ref, lista_uni
     pdf.output(caminho_final)
     return caminho_final
 
+list_meses_inv = {"Jan":1, "Fev":2, "Mar":3, "Abr":4, "Mai":5, "Jun":6, "Jul":7, "Ago":8, "Set":9, "Out":10, "Nov":11, "Dez":12, "Todos":13}
+
 # --- APP PRINCIPAL ---
 def main():
     st.sidebar.title("🏢 Edifício San Rafael")
     st.sidebar.divider()
     opcao = st.sidebar.radio("Navegar:", ["Calculadora de Rateio", "Extrato (Dashboard)", "Entradas/Saídas Avulsas", "Cadastros"])
     
+    # ⚠️ Carrega sempre do Google Sheets
     df = carregar_dados()
     df_config = carregar_config()
     
@@ -390,16 +422,15 @@ def main():
             val_fundo = cf1.number_input("Fundo de Caixa (Valor Unitário)", min_value=0.0, format="%.2f")
             with cf2:
                 st.write("Tabela de Despesas Extras:")
-                # MUDANÇA 1: Tirei "Categoria" da lista de colunas inicial
                 if 'extras_editor' not in st.session_state:
-                    st.session_state['extras_editor'] = pd.DataFrame(columns=["Descrição", "Valor Total", "Ratear Para"])
+                    st.session_state['extras_editor'] = pd.DataFrame(columns=["Descrição", "Categoria", "Valor Total", "Ratear Para"])
                 
                 df_extras_input = st.data_editor(
                     st.session_state['extras_editor'],
                     num_rows="dynamic",
                     column_config={
                         "Descrição": st.column_config.TextColumn(required=True, width="medium"),
-                        # MUDANÇA 2: Removi a configuração da coluna Categoria inteira daqui
+                        "Categoria": st.column_config.SelectboxColumn(options=lista_cats, required=True, width="medium"),
                         "Valor Total": st.column_config.NumberColumn(format="R$ %.2f", required=True),
                         "Ratear Para": st.column_config.SelectboxColumn(options=["Todos", "Só Salas", "Só Aptos"], required=True, default="Todos")
                     },
@@ -507,69 +538,51 @@ def main():
                 st.session_state['df_preview'] = edited_df
                 st.rerun()
 
-            if st.button("🚀 Confirmar e Salvar na nuvem", type="primary"):
+            if st.button("🚀 Confirmar e Lançar na Nuvem", type="primary"):
                 novos = []
-                
-                # --- 1. SALVAR AS ENTRADAS (O que os moradores pagaram) ---
+                extras_config_df = d['extras_df'] 
+
                 for i, row in edited_df.iterrows():
                     st_r = row['Status']
-                    # Aqui pegamos o valor FINAL que o morador pagou (já inclui extra, fundo, rateio)
-                    val_pago = float(forcar_numero(row["Valor Pago"]))
-                    
-                    # Vamos lançar como uma entrada única consolidada para ficar limpo no extrato
-                    # Se quiser detalhado, teria que explodir, mas consolidado evita erros de centavos
-                    novos.append({
-                        "ID": str(uuid.uuid4()), 
-                        "Data": d['data'], 
-                        "Tipo": "Entrada", 
-                        "Categoria": "Rateio Despesas (Água/Luz)", # Categoria principal
-                        "Unidade": row['Unidade'], 
-                        "Descrição": "Rateio Mensal (Cota + Extras)", 
-                        "Valor": val_pago, 
-                        "Status": st_r
-                    })
+                    # val_pago = float(row["Valor Pago"]) # Não usado na lógica de escrita, mas na de status
+                    val_devido = float(row["Total Devido"])
+                    val_pago = float(row["Valor Pago"])
+                    diferenca = val_pago - val_devido 
+                    val_ajuste_individual = float(row["Ajuste"])
 
-                # --- 2. SALVAR SAÍDAS FIXAS (O que o condomínio gastou de Água/Luz) ---
-                if d['totais']['agua'] > 0: 
-                    novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Água/Esgoto", "Unidade": "Condomínio", "Descrição": "Conta Água", "Valor": d['totais']['agua'], "Status": "Ok"})
-                if d['totais']['luz'] > 0: 
-                    novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Luz", "Unidade": "Condomínio", "Descrição": "Conta Luz", "Valor": d['totais']['luz'], "Status": "Ok"})
-                if d['totais']['limp'] > 0: 
-                    novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Limpeza", "Unidade": "Condomínio", "Descrição": "Limpeza", "Valor": d['totais']['limp'], "Status": "Ok"})
+                    novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Rateio Despesas (Água/Luz)", "Unidade": row['Unidade'], "Descrição": "Rateio", "Valor": row['Rateio'], "Status": st_r})
+                    if row['Fundo']>0: novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Fundo de Reserva", "Unidade": row['Unidade'], "Descrição": "Fundo", "Valor": row['Fundo'], "Status": st_r})
+                    
+                    if not extras_config_df.empty:
+                        for _, ext_row in extras_config_df.iterrows():
+                            val_total = forcar_numero(ext_row.get("Valor Total", 0.0))
+                            target = str(ext_row["Ratear Para"])
+                            desc_extra = ext_row["Descrição"]
+                            cat_extra = ext_row["Categoria"] 
+                            aplica = False; div_por = 1
+                            if "Todos" in target: aplica = True; div_por = qtd_salas + qtd_aptos
+                            elif "Sala" in target and "Sala" in row['Unidade']: aplica = True; div_por = qtd_salas
+                            elif "Apto" in target and "Apto" in row['Unidade']: aplica = True; div_por = qtd_aptos
+                            if aplica and div_por > 0:
+                                val_indiv = val_total / div_por
+                                if val_indiv > 0:
+                                    novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": cat_extra, "Unidade": row['Unidade'], "Descrição": f"{desc_extra} ({target})", "Valor": val_indiv, "Status": st_r})
+
+                    if val_ajuste_individual != 0:
+                        novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Ajuste/Gorjeta", "Unidade": row['Unidade'], "Descrição": "Ajuste Manual", "Valor": val_ajuste_individual, "Status": st_r})
+
+                    if diferenca != 0:
+                        novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Entrada", "Categoria": "Ajuste/Gorjeta", "Unidade": row['Unidade'], "Descrição": "Pendência (Falta)" if diferenca < 0 else "Sobra Pagamento", "Valor": diferenca, "Status": st_r})
                 
-                # --- 3. SALVAR SAÍDAS EXTRAS (O conserto do portão, obra, etc) ---
-                # AQUI ESTAVA O ERRO: Simplificamos para pegar direto da tabela original
-                extras_config_df = d.get('extras_df', pd.DataFrame())
+                if d['totais']['agua']>0: novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Água/Esgoto", "Unidade": "Condomínio", "Descrição": "Conta Água", "Valor": d['totais']['agua'], "Status": "Ok"})
+                if d['totais']['luz']>0: novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Luz", "Unidade": "Condomínio", "Descrição": "Conta Luz", "Valor": d['totais']['luz'], "Status": "Ok"})
+                if d['totais']['limp']>0: novos.append({"ID": str(uuid.uuid4()), "Data": d['data'], "Tipo": "Saída", "Categoria": "Pagto Limpeza", "Unidade": "Condomínio", "Descrição": "Limpeza", "Valor": d['totais']['limp'], "Status": "Ok"})
                 
-                if not extras_config_df.empty:
-                    for _, ext_row in extras_config_df.iterrows():
-                        val_total = forcar_numero(ext_row.get("Valor Total", 0.0))
-                        desc_extra = ext_row.get("Descrição", "Despesa Extra")
-                        
-                        # Se tem valor, é uma conta que o condomínio pagou -> SAÍDA
-                        if val_total > 0:
-                            novos.append({
-                                "ID": str(uuid.uuid4()), 
-                                "Data": d['data'], 
-                                "Tipo": "Saída",         # É SAÍDA!
-                                "Categoria": "Obras/Melhorias", # Forçamos categoria de obra
-                                "Unidade": "Condomínio", # Quem pagou foi o caixa do condomínio
-                                "Descrição": desc_extra, 
-                                "Valor": val_total, 
-                                "Status": "Ok"
-                            })
-                
-                # Salva tudo de uma vez
+                # Salva concatenando
                 salvar_dados(pd.concat([df, pd.DataFrame(novos)], ignore_index=True))
                 
-                # Limpa a memória temporária
                 del st.session_state['dados_rateio']
                 del st.session_state['df_preview']
-                
-                # Mensagem e Recarregar
-                st.success("✅ Rateio e Despesas Extras lançados com sucesso!")
-                import time
-                time.sleep(1.5)
                 st.rerun()
 
     elif opcao == "Extrato (Dashboard)":
@@ -645,7 +658,7 @@ def main():
                     if len(val_calc) > 0: valor_divida_atual = abs(val_calc[0])
                 valor_pag = c_pay3.number_input("Valor Recebido (R$)", min_value=0.0, value=valor_divida_atual, format="%.2f")
                 
-                ("Registrar Pagamento da Dívida", type="primary"):
+                if st.button("Registrar Pagamento da Dívida", type="primary"):
                     novo_pagamento = {
                         "ID": str(uuid.uuid4()), "Data": dt_pagamento, "Tipo": "Entrada", "Categoria": "Ajuste/Gorjeta", "Unidade": uni_pag, "Descrição": f"Recuperação de Atrasados - {uni_pag}", "Valor": valor_pag, "Status": "Ok"
                     }
@@ -659,12 +672,8 @@ def main():
 
         st.divider()
         st.subheader("Detalhamento e Edição")
-        
-        # Correção do Index para st.data_editor
-        df_ver_reset = df_ver.reset_index(drop=True)
-        
         df_editado = st.data_editor(
-            df_ver_reset, hide_index=True, width="stretch", num_rows="dynamic",
+            df_ver, hide_index=True, use_container_width=True, num_rows="dynamic",
             column_order=["Data", "Tipo", "Categoria", "Unidade", "Descrição", "Valor", "Status"],
             column_config={
                 "Valor": st.column_config.NumberColumn(format="R$ %.2f"),
@@ -677,19 +686,23 @@ def main():
         )
 
         if st.button("💾 Salvar Alterações na Nuvem", type="primary"):
+            # Lógica de exclusão/edição baseada no ID
             df_orig = carregar_dados()
             
-            df_editado["ID"] = df_ver_reset["ID"]
+            # Garante IDs na tabela editada
+            df_editado["ID"] = df_ver["ID"]
             for i, row in df_editado.iterrows():
                 if pd.isna(row["ID"]) or row["ID"] == "": df_editado.at[i, "ID"] = str(uuid.uuid4())
             
-            ids_visualizados = df_ver_reset["ID"].tolist()
+            ids_visualizados = df_ver["ID"].tolist()
             ids_finais = df_editado["ID"].tolist()
             ids_para_excluir = set(ids_visualizados) - set(ids_finais)
             
+            # Remove excluídos
             if ids_para_excluir: 
                 df_orig = df_orig[~df_orig["ID"].isin(ids_para_excluir)]
             
+            # Atualiza editados
             ids_editados = df_editado["ID"].tolist()
             df_orig = df_orig[~df_orig["ID"].isin(ids_editados)]
             
@@ -698,9 +711,10 @@ def main():
             st.rerun()
 
         st.divider()
-        e_per = df_ver["Valor"][df_ver["Tipo"]=="Entrada"].sum()
-        s_per = df_ver["Valor"][df_ver["Tipo"]=="Saída"].sum()
+        e_per = df_ver[df_ver["Tipo"]=="Entrada"]["Valor"].sum()
+        s_per = df_ver[df_ver["Tipo"]=="Saída"]["Valor"].sum()
         
+        # Saldo Acumulado
         mask_acum = [True] * len(df)
         if ano != "Todos":
             if mes_key != 13: mask_acum = (df["Data"].dt.year < ano) | ((df["Data"].dt.year == ano) & (df["Data"].dt.month <= mes_key))
@@ -783,8 +797,8 @@ def main():
     elif opcao == "Cadastros":
         st.header("⚙️ Configurações")
         c1, c2 = st.columns(2)
-        d_c = c1.data_editor(pd.DataFrame({"Categoria":lista_cats}), num_rows="dynamic", width="stretch", key="ed_cats")
-        d_u = c2.data_editor(pd.DataFrame({"Unidade":lista_unis}), num_rows="dynamic", width="stretch", key="ed_unis")
+        d_c = c1.data_editor(pd.DataFrame({"Categoria":lista_cats}), num_rows="dynamic", use_container_width=True, key="ed_cats")
+        d_u = c2.data_editor(pd.DataFrame({"Unidade":lista_unis}), num_rows="dynamic", use_container_width=True, key="ed_unis")
         if st.button("Salvar Configurações", type="primary"):
             cats = d_c["Categoria"].tolist(); unis = d_u["Unidade"].tolist()
             max_len = max(len(cats), len(unis))
@@ -794,12 +808,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
